@@ -45,6 +45,8 @@ struct MyData {
   TSIOBufferReader output_reader;
   bool             added_prepend;
   int              line_count;
+  bool  header_added;
+  bool footer_added;
 };
 
 static TSIOBuffer       comment_buffer;
@@ -67,6 +69,8 @@ my_data_alloc()
   data->output_buffer = nullptr;
   data->output_reader = nullptr;
   data->added_prepend = false;
+  data->header_added = false;
+  data->footer_added = false;
   data->line_count    = 0;
 
   return data;
@@ -128,12 +132,14 @@ handle_transform(TSCont contp)
     if (towrite > 0) {
       // Count lines and copy the data
 
-      prepend_text_length += 4;
-      char header[prepend_text_length];
-      header[prepend_text_length] = '\0';
-      snprintf(header, sizeof(header), "##%s", prepend_text);
-
-      TSIOBufferWrite(data->output_buffer, header, prepend_text_length);
+      if (!data->header_added) {
+         prepend_text_length += 3;
+         char header[prepend_text_length];
+         header[prepend_text_length] = '\0';
+        snprintf(header, sizeof(header), "##%s\n", prepend_text);
+        TSIOBufferWrite(data->output_buffer, header, prepend_text_length);
+        data->header_added = true;
+      }
 
       TSIOBufferBlock blk = TSIOBufferReaderStart(TSVIOReaderGet(write_vio));
       while (blk) {
@@ -149,26 +155,31 @@ handle_transform(TSCont contp)
         blk = TSIOBufferBlockNext(blk);
       }
     
-
       TSIOBufferReaderConsume(TSVIOReaderGet(write_vio), towrite);
       TSVIONDoneSet(write_vio, TSVIONDoneGet(write_vio) + towrite);
-
-      char footer[256];
-      snprintf(footer, sizeof(footer), "##Totals line:%d", data->line_count);
-      TSIOBufferWrite(data->output_buffer, footer, strlen(footer));
-      data->output_vio = TSVConnWrite(output_conn, contp, data->output_reader, towrite + strlen(footer) + prepend_text_length);
-
-        // read back to console
-      //   printf("Go here");
-      // TSIOBufferBlock blk_ = TSIOBufferReaderStart(data->output_reader);
-      // while (blk_) {
-      //   int64_t     block_avail_;
-      //   const char *block_start_ = TSIOBufferBlockReadStart(blk_ , data->output_reader, &block_avail_);
-      //   printf("%s", block_start_);
-      //   blk_ = TSIOBufferBlockNext(blk_);
-      // }
      
     }
+     
+      // if (data->output_vio) {
+      //    TSVIOReenable(data->output_vio);
+      // }
+      if (TSVIONTodoGet(write_vio) > 0) {
+           TSVIOReenable(write_vio);
+      } else {
+         if (!data->footer_added) {
+         data->footer_added = true;
+           char footer[256];
+          snprintf(footer, sizeof(footer), "##Totals line:%d", data->line_count);
+          TSIOBufferWrite(data->output_buffer, footer, strlen(footer));
+          data->output_vio = TSVConnWrite(output_conn, contp, data->output_reader, towrite + strlen(footer) + prepend_text_length);
+         }
+      }
+     
+    // Send an event back to the upstream if required
+    if (TSVIONTodoGet(write_vio) == 0 && data->footer_added) {
+        TSContCall(TSVIOContGet(write_vio), TS_EVENT_VCONN_WRITE_COMPLETE, write_vio);
+    }
+     
   }
 }
 
