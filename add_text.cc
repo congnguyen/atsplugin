@@ -120,6 +120,8 @@ my_data_alloc(const char *filename)
     memset(header_tmp, 0, file_size + 3);
     snprintf(header_tmp, file_size + 3, "##%s\n", buffer);
     data->header = strdup(header_tmp);
+    free(buffer);
+    buffer = nullptr;
   }
   data->header_length = strlen(data->header);
 
@@ -193,6 +195,7 @@ handle_transform(TSCont contp)
       {
         TSIOBufferWrite(data->output_buffer, data->header, data->header_length);
         data->header_added = true;
+        data->line_count ++;
       }
       TSIOBufferBlock blk = TSIOBufferReaderStart(TSVIOReaderGet(write_vio));
       while (blk)
@@ -223,6 +226,7 @@ handle_transform(TSCont contp)
         if (!data->footer_added)
         {
           data->footer_added = true;
+          data->line_count++;
           int count = 0;
           int number = data->line_count;
           do {
