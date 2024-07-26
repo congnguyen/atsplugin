@@ -108,7 +108,7 @@ my_data_alloc(const char *filename)
   if (buffer == nullptr)
   {
     int n = strlen(filename);
-    int len = n + 5;
+    int len = n + 3;
     char header_tmp[len];
     memset(header_tmp, 0, len);
     snprintf(header_tmp, len, "##%s\n", filename);
@@ -124,7 +124,7 @@ my_data_alloc(const char *filename)
     buffer = nullptr;
   }
   data->header_length = strlen(data->header);
-  data->footer_length = strlen(FOOTER_PRE) + FOOTER_LINES_MAX_CHAR; // for maximum xxxxxxxxx lines
+  data->footer_length = strlen(FOOTER_PRE);
 
   return data;
 }
@@ -179,9 +179,9 @@ handle_transform(TSCont contp)
     data                = my_data_alloc(filepath);
     towrite = TSVIONBytesGet(write_vio);
     if (towrite != INT64_MAX) {
-      towrite += data->header_length + data->footer_length;
+      towrite += data->header_length;
     }
-    data->output_vio    = TSVConnWrite(output_conn, contp, data->output_reader, towrite);
+    // data->output_vio    = TSVConnWrite(output_conn, contp, data->output_reader, towrite);
     TSContDataSet(contp, data);
   }
 
@@ -195,7 +195,7 @@ handle_transform(TSCont contp)
     TSVIOReenable(data->output_vio);
 
     return;
-  }
+  }                                                                                                              
 
   towrite = TSVIONTodoGet(write_vio);
   if (towrite > 0)
@@ -216,7 +216,7 @@ handle_transform(TSCont contp)
         // TSIOBufferCopy(TSVIOBufferGet(data->output_vio), data->header, data->header_length, 0);
         data->header_added = true;
         data->line_count ++;
-        TSVIOReenable(data->output_vio);
+        // TSVIOReenable(data->output_vio);
       }
       TSIOBufferBlock blk = TSIOBufferReaderStart(TSVIOReaderGet(write_vio));
       while (blk)
@@ -244,7 +244,7 @@ handle_transform(TSCont contp)
       if (TSVIONTodoGet(write_vio) > 0)
       {
         if (towrite > 0) {
-            TSVIOReenable(data->output_vio);
+            // TSVIOReenable(data->output_vio);
             TSContCall(TSVIOContGet(write_vio), TS_EVENT_VCONN_WRITE_READY, write_vio);
         }
         
@@ -254,18 +254,33 @@ handle_transform(TSCont contp)
         {
           data->footer_added = true;
           data->line_count++;
-          char footer_full[data->footer_length];
-          memset(footer_full, 0, data->footer_length);
-          snprintf(footer_full, data->footer_length, "%s%d", FOOTER_PRE, data->line_count);
+          int n  = data->line_count;
+          int count = 0;
+          do {
+            n /= 10;
+            ++count;
+          } while (n != 0);
+          data->footer_length += count;
+          char line_count_str[count +1];
+          memset(line_count_str, 0, count + 1);
+          line_count_str[count+1] = '\0';
+          snprintf(line_count_str, count+1,"%d", data->line_count);
+         
+          char footer_full[data->footer_length+2];
+          memset(footer_full, 0, data->footer_length+2);
+          footer_full[data->footer_length+2] = '\0';
+          snprintf(footer_full, data->footer_length+2, "%s%s", FOOTER_PRE, line_count_str);
           data->footer = strdup(footer_full);
 
-          printf("data->footer:%s\n", data->footer);
-          TSIOBufferWrite(data->output_buffer, data->footer, data->footer_length);
-          TSVIOReenable(data->output_vio);
-        }
-          TSVIONBytesSet(data->output_vio, TSVIONDoneGet(write_vio) + data->footer_length + data->header_length);
-          TSVIOReenable(data->output_vio);
+          printf("data->footer:%s:%d\n", data->footer,data->line_count);
+         
+         TSIOBufferWrite(data->output_buffer, data->footer, data->footer_length);
+          TSVIONBytesSet(data->output_vio, TSVIONDoneGet(write_vio) + data->header_length + data->footer_length);
+         // TSVIOReenable(data->output_vio);
+          data->output_vio = TSVConnWrite(output_conn, contp, data->output_reader, TSVIONDoneGet(write_vio) + data->header_length + data->footer_length);
           TSContCall(TSVIOContGet(write_vio), TS_EVENT_VCONN_WRITE_COMPLETE, write_vio);
+
+        }
       }
     }
   }
@@ -305,17 +320,38 @@ add_text_transform(TSCont contp, TSEvent event, void *edata ATS_UNUSED)
   return 0;
 }
 
-static int
-transformable(TSHttpTxn txnp)
-{
-  int url_len;
-  const char *url = TSHttpTxnEffectiveUrlStringGet(txnp, &url_len);
+// static int
+// transformable(TSHttpTxn txnp)
+// {
+//   int url_len;
+//   const char *url = TSHttpTxnEffectiveUrlStringGet(txnp, &url_len);
+//   printf("url: %s\n", url);
 
-  if (url && (url_len >= 5) && (strncmp(url + url_len - 5, ".m3u8", 5) == 0))
-  {
-    return 1;
-  }
-  return 0;
+//   if (url && (url_len >= 5) && (strncmp(url + url_len - 5, ".m3u8", 5) == 0))
+//   {
+//     return 1;
+//   }
+//   return 0;
+// }
+
+static int transformable(TSHttpTxn txnp) {
+    int url_len;
+    const char* url = TSHttpTxnEffectiveUrlStringGet(txnp, &url_len);
+    if (url) {
+        printf("append_text_plugin", "URL: %.*s", url_len, url);
+
+        // Find position of "?" if it exists
+        const char* query_start = std::strchr(url, '?');
+        int len_to_check = query_start ? query_start - url : url_len;
+
+        // Check if the URL segment before the query parameters ends with ".m3u8"
+        if (len_to_check >= 5 && strncmp(url + len_to_check - 5, ".m3u8", 5) == 0) {
+            TSfree((void*)url);  
+            return 1;
+        }
+        TSfree((void*)url);  
+    }
+    return 0;
 }
 
 static void
