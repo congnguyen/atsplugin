@@ -37,6 +37,7 @@
 
 #define PLUGIN_NAME "add_text"
 #define FOOTER_PRE "##Total lines:"
+#define FOOTER_LINES_MAX_CHAR 10
 static const char * filepath = nullptr;
 
 #define ASSERT_SUCCESS(_x) TSAssert((_x) == TS_SUCCESS)
@@ -96,7 +97,6 @@ my_data_alloc(const char *filename)
   MyData *data = static_cast<MyData *>(TSmalloc(sizeof(MyData)));
   TSReleaseAssert(data);
 
-  data->output_vio = nullptr;
   data->output_buffer = TSIOBufferCreate();
   data->output_reader = TSIOBufferReaderAlloc(data->output_buffer);
   data->header_added = false;
@@ -124,6 +124,7 @@ my_data_alloc(const char *filename)
     buffer = nullptr;
   }
   data->header_length = strlen(data->header);
+  data->footer_length = strlen(FOOTER_PRE) + FOOTER_LINES_MAX_CHAR; // for maximum xxxxxxxxx lines
 
   return data;
 }
@@ -174,8 +175,26 @@ handle_transform(TSCont contp)
   data = static_cast<decltype(data)>(TSContDataGet(contp));
   if (!data) {
     printf("my_data_alloc\n");
+  
     data                = my_data_alloc(filepath);
+    towrite = TSVIONBytesGet(write_vio);
+    if (towrite != INT64_MAX) {
+      towrite += data->header_length + data->footer_length;
+    }
+    data->output_vio    = TSVConnWrite(output_conn, contp, data->output_reader, towrite);
     TSContDataSet(contp, data);
+  }
+
+   if (!TSVIOBufferGet(write_vio)) {
+    if (!data->footer_added) {
+      data->footer_added = true;
+      TSIOBufferWrite(data->output_buffer, data->footer, data->footer_length);
+    }
+
+    TSVIONBytesSet(data->output_vio, TSVIONDoneGet(write_vio) + data->footer_length + data->header_length);
+    TSVIOReenable(data->output_vio);
+
+    return;
   }
 
   towrite = TSVIONTodoGet(write_vio);
@@ -194,8 +213,10 @@ handle_transform(TSCont contp)
       if (!data->header_added)
       {
         TSIOBufferWrite(data->output_buffer, data->header, data->header_length);
+        // TSIOBufferCopy(TSVIOBufferGet(data->output_vio), data->header, data->header_length, 0);
         data->header_added = true;
         data->line_count ++;
+        TSVIOReenable(data->output_vio);
       }
       TSIOBufferBlock blk = TSIOBufferReaderStart(TSVIOReaderGet(write_vio));
       while (blk)
@@ -209,48 +230,47 @@ handle_transform(TSCont contp)
             data->line_count++;
           }
         }
-        printf("%s", block_start);
+        // printf("%s", block_start);
         TSIOBufferWrite(data->output_buffer, block_start, block_avail);
+        
         blk = TSIOBufferBlockNext(blk);
       }
+      // TSIOBufferCopy(TSVIOBufferGet(data->output_vio), TSVIOReaderGet(write_vio), towrite, 0);
 
       TSIOBufferReaderConsume(TSVIOReaderGet(write_vio), towrite);
       TSVIONDoneSet(write_vio, TSVIONDoneGet(write_vio) + towrite);
+      // printf("data->lines:%d\n", data->line_count);
 
       if (TSVIONTodoGet(write_vio) > 0)
       {
-        TSVIOReenable(write_vio);
-      }
-      else
+        if (towrite > 0) {
+            TSVIOReenable(data->output_vio);
+            TSContCall(TSVIOContGet(write_vio), TS_EVENT_VCONN_WRITE_READY, write_vio);
+        }
+        
+      }else
       {
         if (!data->footer_added)
         {
           data->footer_added = true;
           data->line_count++;
-          int count = 0;
-          int number = data->line_count;
-          do {
-              count++;
-              number /= 10; 
-          } while (number > 0);
-
-          int len = strlen(FOOTER_PRE) + 2*count;
-         
-          char footer_full[len];
-          memset(footer_full, 0, len);
-          snprintf(footer_full, len, "%s%d", FOOTER_PRE, data->line_count);
+          char footer_full[data->footer_length];
+          memset(footer_full, 0, data->footer_length);
+          snprintf(footer_full, data->footer_length, "%s%d", FOOTER_PRE, data->line_count);
           data->footer = strdup(footer_full);
-          data->footer_length = len;
 
           printf("data->footer:%s\n", data->footer);
           TSIOBufferWrite(data->output_buffer, data->footer, data->footer_length);
-          data->output_vio = TSVConnWrite(output_conn, contp, data->output_reader, towrite + data->footer_length + data->header_length);
-          TSContCall(TSVIOContGet(write_vio), TS_EVENT_VCONN_WRITE_COMPLETE, write_vio);
+          TSVIOReenable(data->output_vio);
         }
+          TSVIONBytesSet(data->output_vio, TSVIONDoneGet(write_vio) + data->footer_length + data->header_length);
+          TSVIOReenable(data->output_vio);
+          TSContCall(TSVIOContGet(write_vio), TS_EVENT_VCONN_WRITE_COMPLETE, write_vio);
       }
     }
   }
 }
+
 
 static int
 add_text_transform(TSCont contp, TSEvent event, void *edata ATS_UNUSED)
