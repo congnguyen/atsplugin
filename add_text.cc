@@ -181,9 +181,6 @@ handle_transform(TSCont contp)
     //   towrite += data->header_length + data->footer_length;
     // }
 
-
-    
-
     data->output_vio    = TSVConnWrite(output_conn, contp, data->output_reader, INT64_MAX);
     TSContDataSet(contp, data);
   }
