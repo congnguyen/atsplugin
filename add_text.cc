@@ -209,6 +209,7 @@ handle_transform(TSCont contp)
     if (towrite > 0)
     {
       // Count lines and copy the data
+      printf("Read from upstream:%d bytes\n",towrite);
 
       if (!data->header_added)
       {
@@ -244,8 +245,10 @@ handle_transform(TSCont contp)
       if (TSVIONTodoGet(write_vio) > 0)
       {
         if (towrite > 0) {
-            TSVIOReenable(data->output_vio);
-            TSContCall(TSVIOContGet(write_vio), TS_EVENT_VCONN_WRITE_READY, write_vio);
+          int64_t writtenout = TSIOBufferReaderAvail(TSVIOReaderGet(data->output_vio));
+          printf("Write out to downstream:%d bytes\n", writtenout);
+          TSVIOReenable(data->output_vio);
+          TSContCall(TSVIOContGet(write_vio), TS_EVENT_VCONN_WRITE_READY, write_vio);
         }
         
       }else
